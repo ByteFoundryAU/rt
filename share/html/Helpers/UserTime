@@ -1,0 +1,71 @@
+<%INIT>
+if ( $user_req && $start_date && $end_date ) {
+    my $user = RT::User->new( $session{CurrentUser} );
+
+    my ($ret, $msg) = $user->Load( $user_req );
+    return ($ret, $msg) unless $ret;
+
+    my $start = RT::Date->new( $session{CurrentUser} );
+    $ret = $start->Set( Value => $start->ParseByTimeParseDate(Value => $start_date, Timezone => 'user') );
+    return $ret unless $ret;
+
+    my $end = RT::Date->new($session{CurrentUser});
+    $ret = $end->Set( Value => $end->ParseByTimeParseDate(Value => $end_date, Timezone => 'user') );
+    return $ret unless $ret;
+
+    my $txns = RT::Transactions->new($session{CurrentUser});
+    $txns->Limit(
+        FIELD    => 'ObjectType',
+        VALUE    => 'RT::Ticket',
+    );
+
+    $txns->Limit(
+        FIELD    => 'Creator',
+        VALUE    => $user->id,
+    );
+
+    $txns->Limit(
+        FIELD    => 'TimeTaken',
+        VALUE    => 0,
+        OPERATOR => '!=',
+    );
+
+    $txns->Limit(
+        FIELD    => 'Created',
+        VALUE    => $start->ISO(Timezone => 'user'),
+        OPERATOR => '>=',
+    );
+
+    $txns->Limit(
+        FIELD    => 'Created',
+        VALUE    => $end->ISO(Timezone => 'user'),
+        OPERATOR => '<=',
+        ENTRYAGGREGATOR => 'AND',
+    );
+
+    my %data;
+    my $total_time_worked = 0;
+    while ( my $txn = $txns->Next ) {
+        my $ticket = $txn->TicketObj;
+        $total_time_worked = $total_time_worked + $txn->TimeTaken;
+
+        my $day_worked = $txn->CreatedObj->RFC2822( Time => 0, Timezone => 'user' );
+        my $time_hours = $txn->TimeTaken / 60;
+
+        push @{$data{$day_worked}}, {DayWorked => $day_worked, Id => $ticket->Id, Subject => $ticket->Subject, Queue => $ticket->QueueObj->Name,
+            Status => $ticket->Status, Owner => $ticket->OwnerObj->Name, Time => $time_hours > 1 ? $time_hours . ' hours (' . $txn->TimeTaken . '  minutes)' : $txn->TimeTaken . ' (minutes)',
+                TimeMin => $txn->TimeTaken};
+    }
+
+    $r->content_type('application/json; charset=utf-8');
+    $m->print(JSON({ TotalTime => $total_time_worked, data => \%data }));
+}
+
+$m->abort();
+</%INIT>
+
+<%ARGS>
+$user_req   =>   undef
+$start_date =>   undef
+$end_date   =>   undef
+</%ARGS>
